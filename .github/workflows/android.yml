@@ -2,8 +2,7 @@ name: ModoFiesta Android APK
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -11,12 +10,64 @@ permissions:
 
 jobs:
   build:
-    name: Build APK
+    name: Extract project and build APK
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Diagnose and extract Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Repository root ==="
+          pwd
+          ls -la
+
+          ZIP_FILE="ModoFiesta_Android_Inicial.zip"
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "::error::No se encuentra $ZIP_FILE en la raíz del repositorio."
+            echo "Archivos ZIP disponibles:"
+            find . -maxdepth 3 -type f -iname '*.zip' -print
+            exit 1
+          fi
+
+          echo "=== Contenido del ZIP ==="
+          unzip -Z1 "$ZIP_FILE" | head -100
+
+          EXTRACT_DIR="$RUNNER_TEMP/modofiesta-extracted"
+          mkdir -p "$EXTRACT_DIR"
+          unzip -oq "$ZIP_FILE" -d "$EXTRACT_DIR"
+
+          echo "=== Buscando settings.gradle.kts ==="
+          SETTINGS_FILE="$(find "$EXTRACT_DIR" -type f -name 'settings.gradle.kts' -print -quit)"
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "::error::El ZIP no contiene settings.gradle.kts."
+            find "$EXTRACT_DIR" -maxdepth 5 -type f -print | sort | head -200
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          echo "Proyecto encontrado en: $PROJECT_DIR"
+
+          test -d "$PROJECT_DIR/app"
+          test -f "$PROJECT_DIR/build.gradle.kts"
+          test -f "$PROJECT_DIR/gradle.properties"
+
+          # Copiar los archivos del proyecto a la raíz del repositorio.
+          cp -a "$PROJECT_DIR/app" .
+          cp "$PROJECT_DIR/settings.gradle.kts" .
+          cp "$PROJECT_DIR/build.gradle.kts" .
+          cp "$PROJECT_DIR/gradle.properties" .
+          [ ! -f "$PROJECT_DIR/README.md" ] || cp "$PROJECT_DIR/README.md" .
+          [ ! -f "$PROJECT_DIR/.gitignore" ] || cp "$PROJECT_DIR/.gitignore" .
+
+          echo "=== Estructura lista para Gradle ==="
+          ls -la
+          test -f settings.gradle.kts
+          test -f app/build.gradle.kts
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -24,14 +75,20 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # Instala Gradle directamente: este proyecto no necesita gradlew.
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
+      - name: Verify Gradle project root
+        run: |
+          echo "Working directory: $(pwd)"
+          test -f settings.gradle.kts
+          test -f build.gradle.kts
+          test -f app/build.gradle.kts
+
       - name: Build debug APK
-        run: gradle --no-daemon clean assembleDebug
+        run: gradle --no-daemon --stacktrace clean assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
